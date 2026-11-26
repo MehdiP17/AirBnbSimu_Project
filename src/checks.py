@@ -105,7 +105,7 @@ def select_files(files):
     # pas d'affichage des fichiers choisis ici : le récap de transform.py s'en charge
     return selected_files
 
-## --------- FONCTION LISTER LES FICHIERS DE S3 ---------
+## --------- FONCTION VERIFIER PRESENCE DES FICHIERS POUR LE TRANSFORM ---------
 def selection_check(files):
     """
     Fonction pour vérifier que tous les fichiers nécessaires sont là pour le transform:
