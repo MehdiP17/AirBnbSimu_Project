@@ -33,13 +33,13 @@ WARNING_COUNT = 0
 
 # on affiche et on continue
 def log_ok(message):
-    print(f"Check OK: {message}")             
+    print(f"CHECK OK: {message}")             
 
 # un warning ajoute +1 au compteur, affiche, continue les checks
 def log_warning(message):
     global WARNING_COUNT                      
     WARNING_COUNT += 1                        
-    print(f"WARNING {message}")            
+    print(f"WARNING: {message}")            
 
 # un error bloque la pipeline 
 ## ex: il n'y a ni de fichier loyer ni de fichier reviews
@@ -100,13 +100,9 @@ def select_files(files):
             selected_files["rents"] = file
         # si ne correspond à aucun on signale
         else:                                                            
-            print(f"ignoré : {file} (nom non reconnu)")
-    
-    # on affiche ce qui a été choisi
-    for extract, file in selected_files["listings"].items():                     
-        print(f"listings choisi : {file} -> relevé du {extract}")
-    print(f"reviews choisi : {selected_files['reviews']}")
-    print(f"rents choisi : {selected_files['rents']}")
+            print(f"Fichier ignoré : {file} (nom non reconnu)")
+
+    # pas d'affichage des fichiers choisis ici : le récap de transform.py s'en charge
     return selected_files
 
 ## --------- FONCTION LISTER LES FICHIERS DE S3 ---------
@@ -121,18 +117,18 @@ def selection_check(files):
     for month in REQUIRED_MONTHS:                                           
         extract = f"{CURRENT_YEAR}-{month}"                              
         if extract in files["listings"]:
-            log_ok(f"sélection : relevé {extract} trouvé")
+            log_ok(f"listings {extract} trouvé")
         else:
-            log_warning(f"sélection : relevé {extract} introuvable, à vérifier")
+            log_warning(f"listings {extract} introuvable, à vérifier")
     # aucun relevé du tout: error
     if not files["listings"]:                                         
-        log_error("sélection : aucun relevé listings trouvé")
+        log_error("aucun listings trouvé")
     # Verifier qu'il y a un fichier reviews et un rents
     for source in ["reviews", "rents"]:                                 
         if files[source] is None:
-            log_error(f"sélection : fichier {source} introuvable")
+            log_error(f"fichier {source} introuvable")
         else:
-            log_ok(f"sélection : {source} trouvé ({files[source]})")
+            log_ok(f"{source} trouvé ({files[source]})")
 
 
 # Pour tester
