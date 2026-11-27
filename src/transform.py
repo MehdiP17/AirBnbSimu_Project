@@ -1,11 +1,12 @@
 from pathlib import Path
 import json
 import pandas as pd
-import shapely
+import os
+import boto3
 
 # fonctions de vérification écrites dans checks.py, lancées ici (import avec un point : src/ est un package)
 from . import checks
-from .checks import RAW_S3_DIR, list_files, choose_files, check_selection, check_tables
+from .checks import list_files, choose_files, check_selection, check_tables
 
 #########################################################################################################
 # ---------------------DEFINITION DES CONSTANTES POUR LA TRANSFORMATION------------------------------------------
@@ -16,6 +17,8 @@ from .checks import RAW_S3_DIR, list_files, choose_files, check_selection, check
 ROOT = Path(__file__).resolve().parent.parent
 # dossier des exports pour verifier à la main en local
 EXPORTS_DIR = ROOT / "data" / "exports"
+# dossier local où on garde une copie des fichiers de S3 (téléchargés une seule fois)
+RAW_DIR = ROOT / "data" / "raw_s3"
 
 ## --------- CONSTANTES : TABLES LOYERS & QUARTIERS ---------
 # Paris = 80 quartiers, 4 par arrondissement : quartiers 1-4 -> 1er, 5-8 -> 2e, etc.
@@ -23,6 +26,20 @@ NEIGHBORHOODS_PER_ARR = 4
 
 # Valeur de la colonne meuble_txt pour un logement meublé
 MEUBLE_TEXT = "meublé"
+
+## noms des colonnes du CSV des loyers (Open Data Paris) -> noms utilisés dans le code
+RENTS_RAW_RENAME = {
+    "Année": "annee",
+    "Numéro du quartier": "id_quartier",
+    "Nom du quartier": "nom_quartier",
+    "Nombre de pièces principales": "piece",
+    "Epoque de construction": "epoque",
+    "Type de location": "meuble_txt",
+    "Loyers de référence": "ref",
+    "Loyers de référence majorés": "max",
+    "Loyers de référence minorés": "min",
+    "Numéro INSEE du quartier": "code_grand_quartier",
+}
 
 ## --------- CONSTANTES : Table quartiers ---------
 ## les colonnes de la table quartiers
@@ -103,16 +120,45 @@ SNAPSHOTS_COLUMNS = [
 # -------------------------DEFINITION DES FONCTIONS POUR LE TRANSFORM-------------------------------------
 #########################################################################################################
 
+# --------- 0. CONNEXION À S3 ---------
+## Connexion S3
+def get_s3():
+    """Crée la connexion au bucket S3."""
+    session = boto3.Session(
+        region_name=os.getenv("AWS_REGION_NAME"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+    return session.client("s3")
+
+## Lire un CSV du bucket : téléchargé une seule fois dans data/raw_s3/, puis relu depuis l'ordinateur
+def read_s3_csv(s3, key, usecols=None):
+    """Télécharge le fichier key dans data/raw_s3/ s'il n'y est pas déjà, puis le lit avec pandas."""
+    # même chemin que dans S3, ex. data/raw_s3/inside-airbnb/paris/listings_2026-03-21.csv
+    local_path = RAW_DIR / key
+
+    # on télécharge seulement si le fichier n'est pas déjà sur l'ordinateur
+    if not local_path.exists():
+        # créer les dossiers s'ils n'existent pas
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"téléchargement : {key}")
+        # download_file découpe les gros fichiers en morceaux et réessaie si un morceau échoue
+        s3.download_file(os.getenv("AWS_BUCKET_NAME"), key, str(local_path))
+    else:
+        print(f"déjà en local : {key}")
+
+    return pd.read_csv(local_path, usecols=usecols, low_memory=False)
+
 # --------- 1. VERIFIER TOUS LES FICHIERS POUR LE TRANSFORM ---------
 
 ## Utilise les fonctions du checks.py pour la verificartion pre-transformation
-def get_files():
+def get_files(s3):
     """
     Récupère les noms des fichiers à transformer grâce aux fonctions de checks.py.
     Renvoie {"listings": {extract: file}, "reviews": file, "rents": file}.
     """
-    # lister tous les fichiers bruts puis garder ceux qui nous intéressent
-    all_files = list_files()
+    # lister tous les fichiers du bucket S3 puis garder ceux qui nous intéressent
+    all_files = list_files(s3, os.getenv("AWS_BUCKET_NAME"))
     files = choose_files(all_files)
 
     # vérifier qu'il ne manque rien (bloque la pipeline si un fichier obligatoire manque)
@@ -123,11 +169,12 @@ def get_files():
 # --------- 2. TRANSFORMATION ET CREATION TABLE LOYERS & QUARTIERS ---------
 
 ## --------- Lire : fichier rents brut ---------
-## MODIF POST S3: modifier read_parquet par read_csv
+def read_rents(s3, file):
+    """Lit le fichier des loyers (CSV) depuis S3 --> dataframe"""
+    rents = read_s3_csv(s3, file)
 
-def read_rents(file):
-    """Lit le fichier des loyers (parquet) depuis raw_s3 --> dataframe"""
-    rents = pd.read_parquet(RAW_S3_DIR / file)
+    # renommer les colonnes du CSV pour retrouver les noms utilisés dans la suite du code
+    rents = rents.rename(columns=RENTS_RAW_RENAME)
     print(f"rents raw: {file} -> {rents.shape}")
     return rents
 
@@ -140,14 +187,12 @@ def transform_quartiers(rents_df):
     # 4 quartiers par arrondissement : quartiers 1-4 -> 1er, 5-8 -> 2e, etc.
     quartiers["arrondissement"] = (quartiers["id_quartier"] - 1) // NEIGHBORHOODS_PER_ARR + 1
 
-    # centre du quartier (binaire WKB) -> longitude et latitude
-    centers = shapely.from_wkb(quartiers["geo_point_2d"])
-    quartiers["longitude"] = shapely.get_x(centers)
-    quartiers["latitude"] = shapely.get_y(centers)
+    # centre du quartier : texte "48.89, 2.33" (latitude, longitude) -> 2 colonnes de nombres
+    coords = quartiers["geo_point_2d"].str.split(",", expand=True)
+    quartiers["latitude"] = coords[0].str.strip().astype(float)
+    quartiers["longitude"] = coords[1].str.strip().astype(float)
 
-    # contour du quartier (binaire WKB) -> texte GeoJSON, lisible par les librairies de cartes
-    shapes = shapely.from_wkb(quartiers["geo_shape"])
-    quartiers["geo_shape"] = shapely.to_geojson(shapes)
+    # contour du quartier : déjà du texte GeoJSON dans le CSV, on le garde tel quel
 
     # garder les colonnes utiles, triées par quartier
     quartiers = quartiers[QUARTIERS_COLUMNS]
@@ -191,14 +236,14 @@ def transform_arrondissements(neighborhoods):
 
 # --------- 2. TRANSFORMATION ET CREATION TABLE LISTINGS & LISTINGS_SNAPSHOTS ---------
 ## --------- Lire et concat : fichier listings brut ---------
-def read_listings(files):
+def read_listings(s3, files):
     """
-    Lit tous les relevés listings sélectionnés 
+    Lit tous les relevés listings sélectionnés depuis S3
     et les empile dans un seul dataframe
     """
     releves = []
     for releve, file in files.items():
-        df = pd.read_csv(RAW_S3_DIR / file, usecols=COLONNES_LISTINGS, low_memory=False)
+        df = read_s3_csv(s3, file, usecols=COLONNES_LISTINGS)
         # on ajoute une colonne releve pour garder de quel fichier vient la ligne (ex. "2026-09")
         df["releve"] = releve
         releves.append(df)
@@ -402,9 +447,12 @@ def export_tables(tables):
 def transform_all():
     """Sélectionne, lit, contrôle et transforme les fichiers bruts. Renvoie {"nom_table": DataFrame}."""
 
+    # 0. Connexion à S3 (une seule fois, réutilisée partout)
+    s3 = get_s3()
+
     # 1. Verifier la présence de tous les fichiers pour le transform
     print("\n--------- VERIFICATION PRESENCE FICHIERS À TRANSFORMER ---------\n")
-    files = get_files()
+    files = get_files(s3)
 
     # 2. Recap des fichiers retenus et du nombre de warnings
     print("\n--------- RECAP FICHIERS À TRANSFORMER ---------\n")
@@ -415,12 +463,12 @@ def transform_all():
 
     # 3. Lecture du fichier des loyers
     print("\n--------- RECAP RENTS ---------\n")
-    rents_raw = read_rents(files["rents"])
+    rents_raw = read_rents(s3, files["rents"])
 
     # 4. Lecture et nettoyage des relevés listings
     # (leur contenu est déjà vérifié avant la mise en S3 : pas de contrôle du brut ici)
     print("\n--------- RECAP LISTINGS ---------\n")
-    listings_raw = read_listings(files["listings"])
+    listings_raw = read_listings(s3, files["listings"])
     clean_listings = transform_listings(listings_raw)
 
     # TODO : lire les reviews ici
@@ -449,5 +497,9 @@ def transform_all():
 # --------- TEST ---------
 # Pour tester seul, depuis la racine du repo : python -m src.transform
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    # lire le .env : nécessaire seulement pour ce test (dans le pipeline, c'est etl.py qui le fait)
+    load_dotenv()
+
     # Export des tables en CSV dans data/exports/ pour les vérifier
     export_tables(transform_all())
