@@ -220,7 +220,7 @@ def transform_loyers(rents_df):
     print(f"table loyers : {loyers.shape} \n")
     return loyers
 
-# --------- 2. TRANSFORMATION ET CREATION TABLE ARRONDISSEMENTS ---------
+# --------- 3. TRANSFORMATION ET CREATION TABLE ARRONDISSEMENTS ---------
 ## --------- Creation : table arrondissements ---------
 def transform_arrondissements(neighborhoods):
     """Construit la table arrondissements (20 lignes : numero, nom) à partir de la table quartiers."""
@@ -234,7 +234,7 @@ def transform_arrondissements(neighborhoods):
     print(f"table arrondissements : {arrondissements.shape} \n")
     return arrondissements
 
-# --------- 2. TRANSFORMATION ET CREATION TABLE LISTINGS & LISTINGS_SNAPSHOTS ---------
+# --------- 4. TRANSFORMATION ET CREATION TABLE LISTINGS & LISTINGS_SNAPSHOTS ---------
 ## --------- Lire et concat : fichier listings brut ---------
 def read_listings(s3, files):
     """
@@ -488,7 +488,7 @@ def transform_all():
         "listing_snapshots": listing_snapshots,
     }
 
-    # 5. Contrôle des tables propres (point 2)
+    # 6. Contrôle des tables propres (point 2)
     check_tables(tables)
 
     return tables

@@ -1,17 +1,13 @@
 # checks.py : les fonctions de contrôle du pipeline.
-# Elles sont ÉCRITES ici, mais LANCÉES dans transform.py et load.py.
+# Elles sont ÉCRITES ici, mais LANCÉES dans transform.py et load.py (et summary() dans etl.py).
+# Ce fichier ne se lance jamais seul.
 
 
 import re                   
-from pathlib import Path     
 import pandas as pd          
 
 
-# --------- CONSTANTES POUR LE CHECK ---------
-## MODIF POST S3: modifier les directories pour récuperer les fichiers dans S3 pas en local
-
-ROOT = Path(__file__).resolve().parent.parent     # racine du projet (ce fichier est dans src/)
-RAW_S3_DIR = ROOT / "data" / "raw_s3"             # directory en local
+# --------- CONSTANTES POUR LE CHECK ---------  
 
 # On ne garde que les fichiers des années en cours: CURRENT_YEAR
 # Et pour les listings : les fichiers trimestriels : REQUIRED_MONTHS : 03 mars, 06 juin, 09 septembre, 12 decembre
@@ -19,10 +15,9 @@ CURRENT_YEAR = str(pd.Timestamp.today().year)
 REQUIRED_MONTHS = ["03", "06", "09", "12"]                
 
 # La structure de nommage des differents types de fichiers attendus: 
-## --------- MODIF POST S3: .parquet à modifier en .csv 
 LISTINGS_PATTERN = r"inside-airbnb/paris/listings_(\d{4})-(\d{2})-\d{2}\.csv"   # listings
 REVIEWS_PATTERN = r"inside-airbnb/paris/reviews_\d{4}-\d{2}-\d{2}\.csv"         # reviews_AAAA-MM-JJ.csv
-RENT_PATTERN = r"encadrement-loyers/paris/encadrement_loyers.*\.parquet"     # encadrement_loyers
+RENT_PATTERN = r"encadrement-loyers/paris/encadrement-des-loyers_\d{4}-\d{2}-\d{2}\.csv"
 
 # compteur des WARNING pre-transform
 WARNING_COUNT = 0                                 
@@ -47,23 +42,26 @@ def log_error(message):
     raise ValueError(message)                 
 
 
-# --------- FONCTION SELECTION DES FICHIERS POUR TRANSFORMATION ---------
-## MODIF POST S3: peut etre il faudra changer des choses sur les chemins ou nommage de fichier à verifier
+# --------- 1. FONCTION VERIFICATION FICHIERS PRE-TRANSFORMATION ---------
 
 ## --------- FONCTION LISTER LES FICHIERS DE S3 ---------
-def list_files(directory=RAW_S3_DIR):
+def list_files(s3, bucket):
     """
-    Liste tous les fichiers dans le bucket S3, triés par nom
+    Liste tous les fichiers du bucket S3, triés par nom
     ex. "inside-airbnb/paris/listings_2026-03-21.csv".
     """
-    files = []                                                         
-    for path in Path(directory).rglob("*"):                           # tout le contenu du dossier et de ses sous-dossiers
-        if path.is_file() and not path.name.startswith("."):      # ne prendre que les fichiers, pas les fichiers cachés (.)
-            files.append(path.relative_to(directory).as_posix())       # ajouter le nom du chemin à partir de raw_s3 dans la liste files
-    return sorted(files)                                               
+    # demander à S3 la liste de tout le bucket 
+    response = s3.list_objects_v2(Bucket=bucket)
+
+    # garder seulement les noms des fichiers, pas les "dossiers" (leur nom finit par /)
+    files = []
+    for obj in response.get("Contents", []):
+        if not obj["Key"].endswith("/"):
+            files.append(obj["Key"])
+    return sorted(files)                                            
 
 ## --------- FONCTION SELECTIONNER LES FICHIERS POUR TRANSFORM ---------
-def select_files(files):
+def choose_files(files):
     """
     Choisit les fichiers qui correspondent à la nomenclature pour chaque type : LISTINGS_PATTERN, REVIEWS_PATTERN, RENTS_PATTERN
 
@@ -81,7 +79,7 @@ def select_files(files):
         "rents": None
         }        
     
-    for file in sorted(files):    
+    for file in files:
         # est-ce que la nomenclature du fichier est un listing
         match = re.fullmatch(LISTINGS_PATTERN, file)     
         # if listing de l'année en cours et un des REQUIRED_MONTHS alors on l'ajoute au dict des selected_files["listings"]                 
@@ -106,7 +104,7 @@ def select_files(files):
     return selected_files
 
 ## --------- FONCTION VERIFIER PRESENCE DES FICHIERS POUR LE TRANSFORM ---------
-def selection_check(files):
+def check_selection(files):
     """
     Fonction pour vérifier que tous les fichiers nécessaires sont là pour le transform:
         listings: warning s'il manque un fichier trimestriel, error s'il n'y a aucun fichier
@@ -131,8 +129,25 @@ def selection_check(files):
             log_ok(f"{source} trouvé ({files[source]})")
 
 
-# Pour tester
+# --------- 2. CONTRÔLE DES TABLES PROPRES (point 2, lancé à la fin de transform_all()) ---------
+def check_tables(tables):
+    """
+    Vérifie les tables propres : clés uniques, vides, plages de valeurs, clés étrangères.
+    TODO : à écrire.
+    """
+    print("check_tables() : à écrire")
 
-if __name__ == "__main__": # seulement si on lance : python src/checks.py
-    fichiers = select_files(list_files())
-    selection_check(fichiers)
+
+# --------- 3. CONTRÔLE APRÈS CHARGEMENT (point 3, lancé dans load.py) ---------
+def check_db_counts(engine, tables):
+    """
+    Compare le nombre de lignes de chaque table dans Supabase à celui du DataFrame.
+    TODO : à écrire.
+    """
+    print("check_db_counts() : à écrire")
+
+
+# --------- 4. BILAN (lancé à la fin de etl.py) ---------
+# si on arrive ici, aucune erreur n'a arrêté le pipeline : 0 erreur
+def summary():
+    print(f"Terminé : 0 erreur, {WARNING_COUNT} attention(s)")
