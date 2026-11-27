@@ -43,8 +43,18 @@ LOYERS_COLUMNS = ["annee",
                  "id_quartier", "nb_pieces", "epoque", "meuble", 
                  "rent_ref", "rent_max", "rent_min"]
 
+## --------- CONSTANTES : AIRBNB ---------
+# Table arrondissements
+## Correspondance numéro d'arrondissement neighbourhood_cleansed d'Inside Airbnb listings
+ARR_NAMES = {
+    1: "Louvre", 2: "Bourse", 3: "Temple", 4: "Hôtel-de-Ville", 5: "Panthéon",
+    6: "Luxembourg", 7: "Palais-Bourbon", 8: "Élysée", 9: "Opéra", 10: "Entrepôt",
+    11: "Popincourt", 12: "Reuilly", 13: "Gobelins", 14: "Observatoire", 15: "Vaugirard",
+    16: "Passy", 17: "Batignolles-Monceau", 18: "Buttes-Montmartre", 19: "Buttes-Chaumont",
+    20: "Ménilmontant",
+}
 
-# --------- 1. FONCTION VERIFIER LES FICHIERS POUR LE TRANSFORM ---------
+# --------- 1. VERIFIER LES FICHIERS POUR LE TRANSFORM ---------
 ## Utilise les fonctions du checks.py pour la verificartion pre-transformation
 def get_files():
     """
@@ -60,8 +70,8 @@ def get_files():
 
     return files
 
-# --------- 2. TRANSFORMATION RENTS (RAW) ---------
-## --------- FONCTION LIRE FICHIER : RENTS ---------
+# --------- 2. TRANSFORMATION ET CREATION TABLE A PARTIR DE RENTS ---------
+## --------- LIRE FICHIER : RENTS ---------
 ## MODIF POST S3: modifier read_parquet par read_csv
 
 def read_rents(file):
@@ -70,7 +80,7 @@ def read_rents(file):
     print(f"rents raw: {file} -> {rents.shape}")
     return rents
 
-## --------- FONCTION: CREATION TABLE QUARTIERS ---------
+## --------- CREATION TABLE QUARTIERS ---------
 def transform_quartiers(rents_df):
     """Construit la table quartiers (80 lignes) à partir du fichier brut rents"""
     # une seule ligne par quartier
@@ -93,10 +103,10 @@ def transform_quartiers(rents_df):
     quartiers = quartiers.sort_values("id_quartier").reset_index(drop=True)
 
     print(f"table quartiers : {quartiers.shape} \n")
-    print(quartiers.info)
+    print(quartiers.count())
     return quartiers
 
-## --------- FONCTION TABLE LOYERS ---------
+## --------- CREATION TABLE LOYERS ---------
 def transform_loyers(rents_df):
     """Construit la table loyers : toutes les années, meublé et non meublé (17 920 lignes)."""
     loyers = rents_df[LOYERS_RAW_COLUMNS].copy()
@@ -113,10 +123,24 @@ def transform_loyers(rents_df):
     loyers = loyers.sort_values(["annee", "id_quartier", "nb_pieces", "epoque", "meuble"]).reset_index(drop=True)
 
     print(f"table loyers : {loyers.shape} \n")
-    print(loyers.head(3))
+    print(loyers.count())
     return loyers
 
-# --------- FONCTION EXPORT DES TABLES ---------
+## --------- CREATION TABLE ARRONDISSEMENTS ---------
+def transform_arrondissements(neighborhoods):
+    """Construit la table arrondissements (20 lignes : numero, nom) à partir de la table quartiers."""
+    # les numéros viennent de la table quartiers, pour que la FK quartiers.arrondissement existe toujours
+    numbers = sorted(neighborhoods["arrondissement"].unique())
+    arrondissements = pd.DataFrame({"numero": numbers})
+
+    # numéro -> nom
+    arrondissements["nom"] = arrondissements["numero"].map(ARR_NAMES)
+
+    print(f"table arrondissements : {arrondissements.shape} \n")
+    print(arrondissements.count())
+    return arrondissements
+
+# --------- EXPORT DES TABLES ---------
 def export_tables(tables):
     """Écrit chaque table en CSV dans data/exports/ pour les vérifier à la main"""
     # créer le dossier s'il n'existe pas encore
@@ -128,7 +152,7 @@ def export_tables(tables):
         table.to_csv(path, index=False)
         print(f"export : {name} {table.shape} -> {path.relative_to(ROOT)}")
 
-# --------- PIPELINE ---------
+# --------- PIPELINE QUI RASSEMBLE TRANSFO ET CREATION TABLES ---------
 # Lancée par etl.py. Ne reçoit rien, renvoie le dict des tables vérifiées.
 def transform_all():
     """Sélectionne, lit, contrôle et transforme les fichiers bruts. Renvoie {"nom_table": DataFrame}."""
@@ -155,9 +179,11 @@ def transform_all():
     print("\n---------- Table crées ---------\n")
     quartiers = transform_quartiers(rents_raw)
     loyers = transform_loyers(rents_raw)
+    arrondissements = transform_arrondissements(quartiers)
     tables = {
         "quartiers": quartiers,
         "loyers": loyers,
+        "arrondissements": arrondissements,
     }
 
     # 5. Contrôle des tables propres (point 2)
