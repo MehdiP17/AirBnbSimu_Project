@@ -20,50 +20,41 @@ EXPORTS_DIR = ROOT / "data" / "exports"
 # dossier local où on garde une copie des fichiers de S3 (téléchargés une seule fois)
 RAW_DIR = ROOT / "data" / "raw_s3"
 
-## --------- CONSTANTES : TABLES LOYERS & QUARTIERS ---------
+## --------- CONSTANTES : TABLES RENTS & NEIGHBORHOODS ---------
 # Paris = 80 quartiers, 4 par arrondissement : quartiers 1-4 -> 1er, 5-8 -> 2e, etc.
 NEIGHBORHOODS_PER_ARR = 4
 
-# Valeur de la colonne meuble_txt pour un logement meublé
-MEUBLE_TEXT = "meublé"
+# Valeur de la colonne Type de Location pour un logement meublé
+FURNISHED_TEXT = "meublé"
 
 ## noms des colonnes du CSV des loyers (Open Data Paris) -> noms utilisés dans le code
 RENTS_RAW_RENAME = {
-    "Année": "annee",
-    "Numéro du quartier": "id_quartier",
-    "Nom du quartier": "nom_quartier",
-    "Nombre de pièces principales": "piece",
-    "Epoque de construction": "epoque",
-    "Type de location": "meuble_txt",
-    "Loyers de référence": "ref",
-    "Loyers de référence majorés": "max",
-    "Loyers de référence minorés": "min",
-    "Numéro INSEE du quartier": "code_grand_quartier",
+    "Année": "year",
+    "Numéro du quartier": "neighborhood_id",
+    "Nom du quartier": "neighborhood_name",
+    "Nombre de pièces principales": "rooms",
+    "Epoque de construction": "construction_period",
+    "Type de location": "furnished_txt",
+    "Loyers de référence": "ref_rent",
+    "Loyers de référence majorés": "max_rent",
+    "Loyers de référence minorés": "min_rent",
+    "Numéro INSEE du quartier": "major_district_code",
+    "geo_shape": "geoshape",
 }
 
-## --------- CONSTANTES : Table quartiers ---------
-## les colonnes de la table quartiers
-QUARTIERS_COLUMNS = ["id_quartier", "nom_quartier", "arrondissement", "code_grand_quartier",
-                         "latitude", "longitude", "geo_shape"]
+## --------- CONSTANTES : Table neighborhoods ---------
+## les colonnes de la table neighborhoods
+NEIGHBORHOODS_COLUMNS = ["neighborhood_id", "neighborhood_name", "district", "major_district_code", 
+                         "latitude", "longitude", "geoshape"]
 
-## --------- CONSTANTES : Table loyers ---------
+## --------- CONSTANTES : Table rents ---------
 ## colonnes du rents brut à mettre dans la table loyer
-LOYERS_RAW_COLUMNS = ["annee", 
-                     "id_quartier", "piece", "epoque", "meuble_txt", 
-                     "ref", "max", "min"]
+RENTS_RAW_COLUMNS = ["year", "neighborhood_id", "rooms", "construction_period", "furnished_txt", "ref_rent", "max_rent", "min_rent"]
 
-## colonnes renommées pour la table loyers
-LOYERS_RENAME = {"piece": "nb_pieces", 
-                "ref": "rent_ref", 
-                "max": "rent_max", 
-                "min": "rent_min"
-                }
 ## colonnes : gardées
-LOYERS_COLUMNS = ["annee", 
-                 "id_quartier", "nb_pieces", "epoque", "meuble", 
-                 "rent_ref", "rent_max", "rent_min"]
+RENTS_COLUMNS = ["year", "neighborhood_id", "rooms", "construction_period", "furnished", "ref_rent", "max_rent", "min_rent"]
 
-## --------- CONSTANTES : TABLE ARRONDISSEMENTS ---------
+## --------- CONSTANTES : TABLE DISTRICTS ---------
 ## Correspondance numéro d'arrondissement --> neighbourhood_cleansed d'Inside Airbnb listings
 ARR_NAMES = {
     1: "Louvre", 2: "Bourse", 3: "Temple", 4: "Hôtel-de-Ville", 5: "Panthéon",
@@ -72,14 +63,14 @@ ARR_NAMES = {
     16: "Passy", 17: "Batignolles-Monceau", 18: "Buttes-Montmartre", 19: "Buttes-Chaumont",
     20: "Ménilmontant",
 }
-## Sens inverse (nom -> numéro) pour remplir la colonne arrondissement des listings
+## Sens inverse (nom -> numéro) pour remplir la colonne district des listings
 ARR_MAP = {nom: numero for numero, nom in ARR_NAMES.items()}
 
 ## --------- CONSTANTES : TABLE LISTINGS & LISTING_SNAPSHOTS ---------
 
 ## -------- CONSTANTES : Filtrage des listings airbnb --------
 ### Colonnes à garder des fichiers listings brut dont on a besoin pour la transfo
-COLONNES_LISTINGS = [
+LISTINGS_RAW_COLUMNS = [
     "id", "last_scraped", "neighbourhood_cleansed", "latitude", "longitude",
     "room_type", "accommodates", "bedrooms", "bathrooms", "bathrooms_text", "amenities",
     "price", "price_quote_checkin_date", "price_quote_checkout_date", "price_quote_raw",
@@ -106,14 +97,14 @@ LISTINGS_RENAME = {
 }
 ## Table listings : une ligne par annonce (infos de description de l'annonce hors prix, on garde le plus recent)
 LISTINGS_COLUMNS = [
-    "listing_id", "arrondissement", "room_type", "accommodates", "bedrooms", "bathrooms",
-    "pieces", "latitude", "longitude", "n_amenities",
+    "listing_id", "district", "room_type", "accommodates", "bedrooms", "bathrooms",
+    "rooms", "latitude", "longitude", "n_amenities",
 ]
 
 ## -------- CONSTANTES :  Table listings_snapshots --------
 ## Table listing_snapshots : une ligne par annonce et par relevé (evolution du prix dans le temps pour une meme annonce)
 SNAPSHOTS_COLUMNS = [
-    "listing_id", "snapshot_date", "releve", "price", "avec_taxes",
+    "listing_id", "snapshot_date", "statement", "price", "with_taxes",
     "checkin_month", "days_before_checkin", "test_nights", "minimum_nights", "number_of_reviews_ltm",
 ]
 #########################################################################################################
@@ -169,70 +160,69 @@ def get_files(s3):
 # --------- 2. TRANSFORMATION ET CREATION TABLE LOYERS & QUARTIERS ---------
 
 ## --------- Lire : fichier rents brut ---------
-def read_rents(s3, file):
+def read_rents_raw(s3, file):
     """Lit le fichier des loyers (CSV) depuis S3 --> dataframe"""
-    rents = read_s3_csv(s3, file)
+    rents_raw = read_s3_csv(s3, file)
 
     # renommer les colonnes du CSV pour retrouver les noms utilisés dans la suite du code
-    rents = rents.rename(columns=RENTS_RAW_RENAME)
-    print(f"rents raw: {file} -> {rents.shape}")
-    return rents
+    rents_raw = rents_raw.rename(columns=RENTS_RAW_RENAME)
+    print(f"rents raw: {file} -> {rents_raw.shape}")
+    return rents_raw
 
-## --------- Creation : table quartiers ---------
-def transform_quartiers(rents_df):
-    """Construit la table quartiers (80 lignes) à partir du fichier brut rents"""
+## --------- Creation : table neighborhoods ---------
+def transform_neighborhoods(rents_df):
+    """Construit la table neighborhoods (80 lignes) à partir du fichier brut rents"""
     # une seule ligne par quartier
-    quartiers = rents_df.drop_duplicates(subset="id_quartier").copy()
+    neighborhoods = rents_df.drop_duplicates(subset="neighborhood_id").copy()
 
     # 4 quartiers par arrondissement : quartiers 1-4 -> 1er, 5-8 -> 2e, etc.
-    quartiers["arrondissement"] = (quartiers["id_quartier"] - 1) // NEIGHBORHOODS_PER_ARR + 1
+    neighborhoods["district"] = (neighborhoods["neighborhood_id"] - 1) // NEIGHBORHOODS_PER_ARR + 1
 
     # centre du quartier : texte "48.89, 2.33" (latitude, longitude) -> 2 colonnes de nombres
-    coords = quartiers["geo_point_2d"].str.split(",", expand=True)
-    quartiers["latitude"] = coords[0].str.strip().astype(float)
-    quartiers["longitude"] = coords[1].str.strip().astype(float)
+    coords = neighborhoods["geo_point_2d"].str.split(",", expand=True)
+    neighborhoods["latitude"] = coords[0].str.strip().astype(float)
+    neighborhoods["longitude"] = coords[1].str.strip().astype(float)
 
     # contour du quartier : déjà du texte GeoJSON dans le CSV, on le garde tel quel
 
     # garder les colonnes utiles, triées par quartier
-    quartiers = quartiers[QUARTIERS_COLUMNS]
-    quartiers = quartiers.sort_values("id_quartier").reset_index(drop=True)
+    neighborhoods = neighborhoods[NEIGHBORHOODS_COLUMNS]
+    neighborhoods = neighborhoods.sort_values("neighborhood_id").reset_index(drop=True)
 
-    print(f"table quartiers : {quartiers.shape} \n")
-    return quartiers
+    print(f"table quartiers : {neighborhoods.shape} \n")
+    return neighborhoods
 
-## --------- Creation : table loyers ---------
-def transform_loyers(rents_df):
+## --------- Creation : table rents ---------
+def transform_rents(rents_df):
     """Construit la table loyers : toutes les années, meublé et non meublé (17 920 lignes)."""
-    loyers = rents_df[LOYERS_RAW_COLUMNS].copy()
+    rents = rents_df[RENTS_RAW_COLUMNS].copy()
 
     # annee : str --> passer en int
-    loyers["annee"] = loyers["annee"].astype(int)
-    # meuble_txt : str -> passer en true/false
-    loyers["meuble"] = loyers["meuble_txt"] == MEUBLE_TEXT
+    rents["year"] = rents["year"].astype(int)
+    # furnished_txt : str -> passer en true/false
+    rents["furnished"] = rents["furnished_txt"] == FURNISHED_TEXT
 
-    # renommer les colonnes de la table loyers
-    loyers = loyers.rename(columns=LOYERS_RENAME)
     # garder les colonnes utiles et les trier
-    loyers = loyers[LOYERS_COLUMNS]
-    loyers = loyers.sort_values(["annee", "id_quartier", "nb_pieces", "epoque", "meuble"]).reset_index(drop=True)
+    rents = rents[RENTS_COLUMNS]
+    rents = rents.sort_values(["year", "neighborhood_id", "rooms", "construction_period", "furnished"]).reset_index(drop=True)
+    rents[["ref_rent", "max_rent", "min_rent"]] = rents[["ref_rent", "max_rent", "min_rent"]].round(2)
+    
+    print(f"table rents : {rents.shape} \n")
+    return rents
 
-    print(f"table loyers : {loyers.shape} \n")
-    return loyers
-
-# --------- 3. TRANSFORMATION ET CREATION TABLE ARRONDISSEMENTS ---------
-## --------- Creation : table arrondissements ---------
-def transform_arrondissements(neighborhoods):
+# --------- 3. TRANSFORMATION ET CREATION TABLE DISTRICTS ---------
+## --------- Creation : table districts ---------
+def transform_districts(neighborhoods):
     """Construit la table arrondissements (20 lignes : numero, nom) à partir de la table quartiers."""
     # les numéros viennent de la table quartiers, pour que la FK quartiers.arrondissement existe toujours
-    numbers = sorted(neighborhoods["arrondissement"].unique())
-    arrondissements = pd.DataFrame({"numero": numbers})
+    numbers = sorted(neighborhoods["district"].unique())
+    districts = pd.DataFrame({"number": numbers})
 
     # numéro -> nom
-    arrondissements["nom"] = arrondissements["numero"].map(ARR_NAMES)
+    districts["name"] = districts["number"].map(ARR_NAMES)
 
-    print(f"table arrondissements : {arrondissements.shape} \n")
-    return arrondissements
+    print(f"table arrondissements : {districts.shape} \n")
+    return districts
 
 # --------- 4. TRANSFORMATION ET CREATION TABLE LISTINGS & LISTINGS_SNAPSHOTS ---------
 ## --------- Lire et concat : fichier listings brut ---------
@@ -241,13 +231,13 @@ def read_listings(s3, files):
     Lit tous les relevés listings sélectionnés depuis S3
     et les empile dans un seul dataframe
     """
-    releves = []
-    for releve, file in files.items():
-        df = read_s3_csv(s3, file, usecols=COLONNES_LISTINGS)
+    statements = []
+    for statement, file in files.items():
+        df = read_s3_csv(s3, file, usecols=LISTINGS_RAW_COLUMNS)
         # on ajoute une colonne releve pour garder de quel fichier vient la ligne (ex. "2026-09")
-        df["releve"] = releve
-        releves.append(df)
-    return pd.concat(releves, ignore_index=True)
+        df["statement"] = pd.to_datetime(statement)
+        statements.append(df)
+    return pd.concat(statements, ignore_index=True)
 
 ## --------- Conversion : convertir dans les bons types ---------
 def convert_types(df):
@@ -263,9 +253,11 @@ def convert_types(df):
         df["price"].str.replace("$", "", regex=False).str.replace(",", "", regex=False),
         errors="coerce",
     )
+    # arrondi à 2 décimales (numeric(10,2) dans Supabase), les vides restent vides
+    df["price"] = df["price"].round(2)
 
     # dates : texte -> date
-    df["snapshot_date"] = pd.to_datetime(df["last_scraped"])
+    df["snapshot_date"] = pd.to_datetime(df["last_scraped"]).dt.normalize()
     df["price_quote_checkin_date"] = pd.to_datetime(df["price_quote_checkin_date"])
     df["price_quote_checkout_date"] = pd.to_datetime(df["price_quote_checkout_date"])
 
@@ -287,6 +279,8 @@ def fill_bedrooms(df):
 
     # on ne remplit que les vides
     df["bedrooms"] = df["bedrooms"].fillna(df["id"].map(last_bedrooms))
+    # entier qui accepte les vides (il en reste quelques-uns) : Int64 avec I majuscule
+    df["bedrooms"] = df["bedrooms"].astype("Int64")
     return df
 
 ## --------- Remplissage : remplir valeurs manquantes manquantes de bathrooms ---------
@@ -301,7 +295,8 @@ def fill_bathrooms(df):
 
     # on extrait le premier nombre du texte (ex. "1.5 baths" -> 1.5)
     number = pd.to_numeric(text.str.extract(r"(\d+\.?\d*)")[0])
-    df["bathrooms"] = df["bathrooms"].fillna(number)
+    # arrondi à 1 décimale (numeric(2,1) dans Supabase)
+    df["bathrooms"] = df["bathrooms"].fillna(number).round(1)
     return df
 
 ## --------- Creation de colonnes : days_before_checkin & test_nights ---------
@@ -317,30 +312,33 @@ def add_test_stay(df):
         test_nights : combien de nuits dure le séjour test
     """
     df = df.copy()
-    df["days_before_checkin"] = (df["price_quote_checkin_date"] - df["snapshot_date"]).dt.days
-    df["test_nights"] = (df["price_quote_checkout_date"] - df["price_quote_checkin_date"]).dt.days
+    # Int64 (I majuscule) : calculés avant les filtres, il y a encore des dates vides
+    df["days_before_checkin"] = (df["price_quote_checkin_date"] - df["snapshot_date"]).dt.days.astype("Int64")
+    df["test_nights"] = (df["price_quote_checkout_date"] - df["price_quote_checkin_date"]).dt.days.astype("Int64")
     return df
 
 ## --------- Creation de colonnes : arr., checkin_month, pieces, taxes ---------
 def add_columns(df):
     """
     Nouvelles colonnes : 
-    arrondissement, 
-    mois d'arrivée, 
-    pièces, 
-    taxes.
+    district, 
+    mois d'arrivée: checkin_month, 
+    rooms, 
+    with_taxes.
     """
     df = df.copy()
 
     # nom du quartier Airbnb -> numéro d'arrondissement
-    df["arrondissement"] = df["neighbourhood_cleansed"].map(ARR_MAP)
-    df["checkin_month"] = df["price_quote_checkin_date"].dt.month
+    df["district"] = df["neighbourhood_cleansed"].map(ARR_MAP)
+    # mois d'arrivée : int64 (i minuscule), plus aucun vide après les filtres
+    df["checkin_month"] = df["price_quote_checkin_date"].dt.month.astype("int64")
 
     # pièces = chambres + 1 (le séjour), 4 = 4 et plus (comme dans la table loyers)
-    df["pieces"] = (df["bedrooms"] + 1).clip(upper=4)
+    # Int64 (I majuscule) : vide quand bedrooms est vide
+    df["rooms"] = (df["bedrooms"] + 1).clip(upper=4).astype("Int64")
 
     # prix avec taxes : 1 si le devis indique des taxes, sinon 0
-    df["avec_taxes"] = df["price_quote_raw"].map(lambda t: json.loads(t)["quote"]["taxes"] is not None).astype(int)
+    df["with_taxes"] = df["price_quote_raw"].map(lambda t: json.loads(t)["quote"]["taxes"] is not None)
     return df
 
 ## --------- Creation de colonnes : count des amenities ---------
@@ -463,7 +461,7 @@ def transform_all():
 
     # 3. Lecture du fichier des loyers
     print("\n--------- RECAP RENTS ---------\n")
-    rents_raw = read_rents(s3, files["rents"])
+    rents_raw = read_rents_raw(s3, files["rents"])
 
     # 4. Lecture et nettoyage des relevés listings
     # (leur contenu est déjà vérifié avant la mise en S3 : pas de contrôle du brut ici)
@@ -475,15 +473,15 @@ def transform_all():
 
     # 5. Construction des tables
     print("\n---------- Table crées ---------\n")
-    quartiers = transform_quartiers(rents_raw)
-    loyers = transform_loyers(rents_raw)
-    arrondissements = transform_arrondissements(quartiers)
+    neighborhoods = transform_neighborhoods(rents_raw)
+    rents = transform_rents(rents_raw)
+    districts = transform_districts(neighborhoods)
     listing_snapshots = build_listing_snapshots(clean_listings)
     listings = build_listings(clean_listings)
     tables = {
-        "arrondissements": arrondissements,
-        "quartiers": quartiers,
-        "loyers": loyers,
+        "districts": districts,
+        "neighborhoods": neighborhoods,
+        "rents": rents,
         "listings": listings,
         "listing_snapshots": listing_snapshots,
     }
