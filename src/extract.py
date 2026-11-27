@@ -209,7 +209,7 @@ def fichier_temoin(s3):
 # ---------- Programme principal ----------
 
 
-def main():
+def extract_all():
 
     load_dotenv()
     s3 = connexion_s3()
@@ -222,4 +222,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    extract_all()
